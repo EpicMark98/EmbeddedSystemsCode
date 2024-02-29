@@ -141,5 +141,33 @@ void SysTick_Handler(void)
 /******************************************************************************/
 
 /* USER CODE BEGIN 1 */
+extern char receivedChar;
+extern char receivedNum;
+extern uint8_t ready;
 
+void USART3_4_IRQHandler(void)
+{
+	static uint8_t charMode = 1;
+	if(charMode) {
+		char temp = (char)USART3->RDR;
+		
+		// Validate character. If invalid, set receivedNum to 0 to trigger main loop error handling
+		if(temp != 'r' && temp != 'g' && temp != 'b' && temp != 'o')
+		{
+			receivedChar = temp;
+			ready = 1;			
+		}
+		else
+		{
+			receivedChar = temp;
+			charMode = 0;
+		}
+	}
+	else
+	{
+		receivedNum = (char)USART3->RDR;
+		charMode = 1;
+		ready = 1;
+	}
+}
 /* USER CODE END 1 */

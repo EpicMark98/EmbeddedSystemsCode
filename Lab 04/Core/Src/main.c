@@ -43,6 +43,12 @@
 
 /* USER CODE BEGIN PV */
 
+//#define BLOCKING
+
+volatile char receivedChar = 0;
+volatile char receivedNum = '3';
+volatile uint8_t ready = 0;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -56,7 +62,7 @@ void SystemClock_Config(void);
 
 // Transmits one character over the USART interface
 void TransmitChar(char c) {
-	while(USART3->ISR & 0x80);	// wait until TXE (bit 7 of ISR) is 0
+	while(!(USART3->ISR & 0x80));	// wait until TXE (bit 7 of ISR) is 1
 	USART3->TDR = c;	// write the character to the USART
 }
 
@@ -64,7 +70,7 @@ void TransmitChar(char c) {
 void TransmitString(char s[]) {
 	int i = 0;
 	while(s[i]) {		// Loop until a null character is reached
-		TransmitChar(s[i]);
+		TransmitChar(s[i++]);
 	}
 }
 
@@ -78,21 +84,102 @@ int main(void) {
 	SystemClock_Config(); //Configure the system clock
 	
 	// Initialize GPIO and Timer
-	RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;
-	RCC->AHBENR |= RCC_AHBENR_GPIOCEN | RCC_AHBENR_GPIOAEN | RCC_APB1ENR_USART3EN;
+	RCC->APB1ENR |= RCC_APB1ENR_TIM2EN | RCC_APB1ENR_USART3EN;
+	RCC->AHBENR |= RCC_AHBENR_GPIOCEN | RCC_AHBENR_GPIOAEN;
 	
-	// Initialize Pins 6 through 9
-	GPIOC->MODER = 0x55000;
+	// Initialize Pins 4 through 9
+	GPIOC->MODER = 0x55A00;
+	
+	// Set alternate function mode
+	GPIOC->AFR[0] |= 0x110000;
 	
 	// Turn all LEDS off
 	GPIOC->ODR &= ~((1 << 6) | (1 << 7) | (1 << 8) | (1 << 9));
 	
-	//TODO: Initialize the USART here
+	// Initialize the USART
+	USART3->BRR = 8000000 / 115200;	// Set baud rate
+	USART3->CR1 = USART_CR1_TE | USART_CR1_RE | USART_CR1_UE;	// 8 data bit, 1 start bit, 1 stop bit, no parity, reception and transmission mode
 	
 	
+#ifndef BLOCKING
+	// Enable interrupts and set priority
+	USART3->CR1 |= USART_CR1_RXNEIE;
+	NVIC_EnableIRQ(USART3_4_IRQn);
+	NVIC_SetPriority(USART3_4_IRQn, 2);	
+#endif
 	
-	while (1) {
+	while (1) 
+	{
+#ifdef BLOCKING
+		// Loop until RXNE is high, indicating data to be read
+		while((USART3->ISR & 0x20) != 0x20);
 		
+		// Read the character and toggle the appropriate LED
+		char c = (char)USART3->RDR;
+		switch(c)
+		{
+			case 'r':
+				GPIOC->ODR ^= (1 << 6);
+				break;
+			case 'b':
+				GPIOC->ODR ^= (1 << 7);
+				break;
+			case 'o':
+				GPIOC->ODR ^= (1 << 8);
+				break;
+			case 'g':
+				GPIOC->ODR ^= (1 << 9);
+				break;
+			default:
+				TransmitString("Invalid character recieved: ");
+				TransmitChar(c);
+				TransmitString("\r\n");
+		}
+#else
+		TransmitString("CMD? ");
+		
+		while(!ready);
+		ready = 0;
+		
+		// Validate character and go back to waiting if invalid
+		if((receivedChar != 'r' && receivedChar != 'g' && receivedChar != 'b' && receivedChar != 'o') || (receivedNum >= '3' || receivedNum < '0'))
+		{
+			TransmitString("\r\n   Invalid character received\r\n");
+			receivedNum = '3';
+			continue;
+		}
+		TransmitString("\r\n   Command recognized: ");
+		
+		uint8_t gpioNum;
+		if(receivedChar == 'r') {
+			gpioNum = 6;
+		}
+		else if(receivedChar == 'g') {
+			gpioNum = 9;
+		}
+		else if(receivedChar == 'b') {
+			gpioNum = 7;
+		}
+		else if(receivedChar == 'o') {
+			gpioNum = 8;
+		}
+		
+		if(receivedNum == '0') {
+			GPIOC->ODR &= ~(1 << gpioNum);
+		}
+		else if(receivedNum == '1') {
+			GPIOC->ODR |= (1 << gpioNum);
+		}
+		else if(receivedNum == '2') {
+			GPIOC->ODR ^= (1 << gpioNum);
+		}
+		
+		TransmitChar(receivedChar);
+		TransmitChar(receivedNum);
+		TransmitString("\r\n");
+		
+		receivedNum = '3';
+#endif
 	}
 }
 
