@@ -56,26 +56,31 @@ void SystemClock_Config(void);
 
 // Helper function to perform an I2C read
 uint8_t I2C_Read(uint8_t slaveAddr, uint8_t registerAddr) {
-	I2C2->CR2 = (1 << 16) | (1 << 13) | slaveAddr;	// Setup write transaction
-	while(I2C2->ISR | 0x12);	// Wait until bit 4 or 1 is set
+	I2C2->CR2 = (1 << 16) | (slaveAddr << 1);	// Setup write transaction
+	I2C2->CR2 |= I2C_CR2_START;	// Set start bit
+	while(!(I2C2->ISR & 0x12));	// Wait until bit 4 or 1 is set
 	I2C2->TXDR = registerAddr;	// Address of register
-	while(I2C2->ISR | 0x40);	// Wait until bit 6 is set
-	I2C2->CR2 = (1 << 16) | (1 << 13) | (1 << 10) |0x6B;	// Setup read transaction
-	while(I2C2->ISR | 0x14);	// Wait until bit 4 or 2 is set
-	while(I2C2->ISR | 0x40);	// Wait until bit 6 is set
+	while(!(I2C2->ISR & 0x40));	// Wait until bit 6 is set
+	
+	I2C2->CR2 = (1 << 16) | (1 << 10) | (slaveAddr << 1);	// Setup read transaction
+	I2C2->CR2 |= (1 << 13);	// Set start bit
+	while(!(I2C2->ISR & 0x14));	// Wait until bit 4 or 2 is set
+	uint8_t data = I2C2->RXDR;	// Read the data
+	while(!(I2C2->ISR & 0x40));	// Wait until bit 6 is set
 	I2C2->CR2 |= (1 << 14);	// Set STOP bit
 	
-	return I2C2->RXDR;
+	return data;
 }
 
 // Helper function to perform an I2C write
 void I2C_Write(uint8_t slaveAddr, uint8_t data[], uint8_t numBytes) {
-	I2C2->CR2 = (numBytes << 16) | (1 << 13) | slaveAddr;	// Setup write transaction
+	I2C2->CR2 = (numBytes << 16) | (slaveAddr << 1);	// Setup write transaction
+	I2C2->CR2 |= (1 << 13);	// Set start bit
 	for(uint8_t bytesWritten = 0; bytesWritten < numBytes; ++bytesWritten) {
-		while(I2C2->ISR | 0x12);	// Wait until bit 4 or 1 is set
+		while(!(I2C2->ISR & 0x12));	// Wait until bit 4 or 1 is set
 		I2C2->TXDR = data[bytesWritten];	// Next data byte
 	}
-	while(I2C2->ISR | 0x40);	// Wait until bit 6 is set
+	while(!(I2C2->ISR & 0x40));	// Wait until bit 6 is set
 	I2C2->CR2 |= (1 << 14);	// Set STOP bit
 }
 
@@ -89,13 +94,14 @@ int main(void) {
 	SystemClock_Config(); //Configure the system clock
 	
 	// Initialize GPIO and I2C
-	RCC->AHBENR |= RCC_AHBENR_GPIOCEN | RCC_AHBENR_GPIOBEN | RCC_APB1ENR_I2C2EN;
+	RCC->AHBENR |= RCC_AHBENR_GPIOCEN | RCC_AHBENR_GPIOBEN;
+	RCC->APB1ENR |= RCC_APB1ENR_I2C2EN;
 	
 	// Initialize PB13 and PB11 to AF mode and PB14 to output mode
 	GPIOB->MODER = 0x18800000;
 	GPIOB->OTYPER = 0x2800;
 	
-	// Select alternate functions
+	// Select alternate functions (PB13 set to AF5 - I2C2 SCL, PB11 set to AF1 - I2C2 SDA)
 	GPIOB->AFR[1] = 0x00501000;
 	
 	// Initialize PC0 to output mode (as well as PC6-9 for LEDs)
@@ -105,27 +111,54 @@ int main(void) {
 	GPIOC->ODR = 0x1;
 	
 	// Set PB14 high
-	GPIOB->ODR = 0x4000;
+	GPIOB->ODR |= 0x4000;
 	
 	// Configure I2C (PRESC = 1, SCLL = 0x13, SCLH = 0xF, SDADEL = 0x2, SCLDEL = 0x4)
 	I2C2->TIMINGR = (0x1 << 28) | (0x13) | (0xF << 8) | (0x2 << 16) | (0x4 << 20);
 	I2C2->CR1 |= I2C_CR1_PE;
 	
 	// Read the WHO_AM_I register
-	uint8_t whoAmI = I2C_Read(0x6B, 0xF);
+	uint8_t whoAmI = I2C_Read(0x69, 0xF);
 	
-	// Verify that WHO_AM_I returned 0xD4
-	if(whoAmI != 0xD4) {
-		return 0;
+	// Verify that WHO_AM_I returned 0xD3
+	if(whoAmI != 0xD3) {
+		GPIOC->ODR |= (1 << 6);
+		while(1);
 	}
 	
 	// Configure gyroscope
 	uint8_t data[2] = {0x20, 0x0F};
-	I2C_Write(0x6B, data, 2);
+	I2C_Write(0x69, data, 2);
 	
 	// Main gyroscope and LED operation loop
 	while (1) {
+		HAL_Delay(100);	//ADC Wait 100 ms
 		
+		// Read all the data
+		uint8_t xl = I2C_Read(0x69, 0x28);
+		uint8_t xh = I2C_Read(0x69, 0x29);
+		uint8_t yl = I2C_Read(0x69, 0x2A);
+		uint8_t yh = I2C_Read(0x69, 0x2B);
+		
+		int16_t x = (xh << 8) | xl;
+		int16_t y = (yh << 8) | yl;
+		
+		// Turn on the LED that points in the direction of rotation
+		GPIOC->ODR &= ~(0xF << 6);
+		if(y > 1000) {
+			GPIOC->ODR |= (1 << 6);
+		}
+		else if(y < -1000) {
+			GPIOC->ODR |= (1 << 7);
+		}
+		else{
+			if(x > 1000) {
+				GPIOC->ODR |= (1 << 9);
+			}
+			else if(x < -1000) {
+				GPIOC->ODR |= (1 << 8);
+			}
+		}
 	}
 }
 
