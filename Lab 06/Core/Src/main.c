@@ -66,9 +66,10 @@ int main(void) {
 	// Initialize GPIO and ADC
 	RCC->AHBENR |= RCC_AHBENR_GPIOCEN | RCC_AHBENR_GPIOAEN;
 	RCC->APB2ENR |= RCC_APB2ENR_ADC1EN;
+	RCC->APB1ENR |= RCC_APB1ENR_DACEN;
 	
-	// Configure PA1 for analog mode
-	GPIOA->MODER = 0xC;
+	// Configure PA1 and PA4 for analog mode
+	GPIOA->MODER = 0x30C;
 	
 	// Initialize LEDs
 	GPIOC->MODER = 0x55000;
@@ -92,6 +93,13 @@ int main(void) {
 	ADC1->CR |= 0x1;
 	ADC1->CR |= ADC_CR_ADSTART;
 	
+	// Configure DAC
+	DAC->CR |= (7 << 3) | (1 << 2);	// Sets software trigger
+	DAC->CR |= 0x1;	// Enables the DAC
+	
+	const uint8_t triangle_table[32] = {0,15,31,47,63,79,95,111,127,142,158,174,190,206,222,238,254,238,222,206,190,174,158,142,127,111,95,79,63,47,31,15};
+	uint8_t index = 0;
+		
 	while (1) {
 		
 		// Read the ADC value and change the LEDs accordingly
@@ -110,6 +118,12 @@ int main(void) {
 			output |= (1 << 8);
 		}
 		GPIOC->ODR = output;
+		
+		// Write value to DAC and wait 1 ms
+		DAC->DHR8R1 = triangle_table[index];
+		DAC->SWTRIGR |= 0x1;
+		index = (index + 1) % 32;
+		HAL_Delay(1);
 	}
 }
 
